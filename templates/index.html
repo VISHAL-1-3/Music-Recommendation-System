@@ -1,0 +1,57 @@
+<!-- templates/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Music Recommender</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>Music Recommendation System</h1>
+        
+        <div class="search-container">
+            <form action="{{ url_for('recommend') }}" method="post">
+                <div class="search-type">
+                    <label for="search-type">Search by:</label>
+                    <select id="search-type" name="search_type">
+                        <option value="song" {% if selected_type == 'song' %}selected{% endif %}>Song Name</option>
+                        <option value="artist" {% if selected_type == 'artist' %}selected{% endif %}>Artist</option>
+                        <option value="genre" {% if selected_type == 'genre' %}selected{% endif %}>Genre</option>
+                        <option value="mood" {% if selected_type == 'mood' %}selected{% endif %}>Mood</option>
+                    </select>
+                </div>
+                
+                <div class="search-box">
+                    <input type="text" name="query" value="{{ query or '' }}" placeholder="Enter your search term..." required>
+                    <button type="submit">Get Recommendations</button>
+                </div>
+            </form>
+        </div>
+        
+        {% if error_message %}
+        <div class="error-message">
+            {{ error_message }}
+        </div>
+        {% endif %}
+        
+        {% if recommendations %}
+        <div class="results-container">
+            {% for rec in recommendations %}
+            <div class="recommendation-card">
+                <div class="image-placeholder">
+                    <div class="no-image-text">No Image Available</div>
+                </div>
+                <div class="song-info">
+                    <h3>{{ rec.track_name }}</h3>
+                    <p class="artist">{{ rec.artists }}</p>
+                    <p class="genre">{{ rec.track_genre }}</p>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>
