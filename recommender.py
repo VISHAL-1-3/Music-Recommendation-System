@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.neighbors import NearestNeighbors
 
 class InteractiveMusicRecommender:
     def __init__(self, data_path=None, df=None):
@@ -42,11 +42,15 @@ class InteractiveMusicRecommender:
         for feature, weight in self.feature_weights.items():
             self.songs[feature] *= weight
             
+        # Initialize KNN model
+        self.knn = NearestNeighbors(n_neighbors=10, algorithm='auto', metric='euclidean')
+        self.knn.fit(self.songs[self.features])
+        
         # Pre-compute genre weights
         self.genre_weights = pd.get_dummies(self.songs['track_genre'])
         
     def get_recommendations(self, song_name, n_recommendations=5):
-        """Get recommendations based on song name with optimized similarity calculation"""
+        """Get recommendations based on song name using KNN"""
         song_name_lower = song_name.lower()
         
         # Find exact matches (case-insensitive)
@@ -62,17 +66,11 @@ class InteractiveMusicRecommender:
             print(f"\nFound exact match:")
             reference_song = exact_matches.iloc[0]
         
-        # Calculate similarities using vectorized operations
-        feature_similarities = cosine_similarity(
-            self.songs[self.features],
-            reference_song[self.features].values.reshape(1, -1)
-        ).flatten()
-        
-        # Calculate genre similarity using one-hot encoded genres
-        genre_similarity = (self.genre_weights[self.songs['track_genre'] == reference_song['track_genre']]).values.flatten()
-        
-        # Combine similarities (70% features, 30% genre)
-        similarities = (0.7 * feature_similarities) + (0.3 * genre_similarity)
+        # Get KNN recommendations
+        distances, indices = self.knn.kneighbors(
+            reference_song[self.features].values.reshape(1, -1),
+            n_neighbors=n_recommendations + len(exact_matches)
+        )
         
         # Create recommendations list
         recommendations = []
@@ -84,93 +82,93 @@ class InteractiveMusicRecommender:
                     'track_name': match['track_name'],
                     'artists': match['artists'],
                     'track_genre': match['track_genre'],
-                    'similarity_score': 1.0,
+                    'distance': 0.0,
                     'match_type': 'Exact Match'
                 })
         
         # Then add similar songs (excluding exact matches)
         added_songs = set((exact_matches['track_name'] + exact_matches['artists']).values)
         
-        # Get top indices excluding exact matches
-        mask = ~self.songs.index.isin(exact_matches.index)
-        filtered_similarities = similarities.copy()
-        filtered_similarities[~mask] = -1
-        top_indices = np.argsort(filtered_similarities)[::-1][:n_recommendations]
-        
-        for idx in top_indices:
-            song = self.songs.iloc[idx]
-            recommendations.append({
-                'track_name': song['track_name'],
-                'artists': song['artists'],
-                'track_genre': song['track_genre'],
-            })
-        
-        return recommendations
-    
-    def get_recommendations_by_artist(self, artist_name, n_recommendations=10):
-      """Get recommendations based on artist name, prioritizing all songs by the artist"""
-      artist_name_lower = artist_name.lower()
-    
-    # Find all songs by the artist (case-insensitive)
-      artist_songs = self.songs[self.songs['artists'].fillna('').str.lower().str.contains(artist_name_lower, na=False)]
-    
-      if len(artist_songs) == 0:
-        return f"Artist '{artist_name}' not found in the dataset."
-    
-    # Remove duplicates based on track name
-      artist_songs = artist_songs.drop_duplicates(subset=['track_name'], keep='first')
-      print(f"\nFound {len(artist_songs)} unique songs by {artist_name}")
-    
-    # Create recommendations list
-      recommendations = []
-    
-    # Add all songs by the artist
-      for _, song in artist_songs.iterrows():
-        recommendations.append({
-            'track_name': song['track_name'],
-            'artists': song['artists'],
-            'track_genre': song['track_genre'],
-            'similarity_score': 1.0,
-            'match_type': 'Artist Song'
-        })
-    
-    # If we don't have enough songs by the artist to meet n_recommendations,
-    # only then add similar songs by other artists
-      if len(recommendations) < n_recommendations:
-        # Calculate average features of artist's songs
-        artist_features = artist_songs[self.features].mean().values.reshape(1, -1)
-        
-        # Calculate similarities
-        similarities = cosine_similarity(self.songs[self.features], artist_features).flatten()
-        
-        # Exclude songs by the searched artist
-        mask = ~self.songs['artists'].fillna('').str.lower().str.contains(artist_name_lower, na=False)
-        filtered_similarities = similarities.copy()
-        filtered_similarities[~mask] = -1
-        top_indices = np.argsort(filtered_similarities)[::-1]
-        
-        seen_songs = set((song['track_name'], song['artists']) for song in recommendations)
-        
-        for idx in top_indices:
+        for i, idx in enumerate(indices[0]):
             if len(recommendations) >= n_recommendations:
                 break
                 
             song = self.songs.iloc[idx]
             song_key = (song['track_name'], song['artists'])
             
-            if song_key not in seen_songs:
+            if song_key not in added_songs:
                 recommendations.append({
                     'track_name': song['track_name'],
                     'artists': song['artists'],
                     'track_genre': song['track_genre'],
+                    'distance': distances[0][i],
                     'match_type': 'Similar Song'
                 })
-                seen_songs.add(song_key)
+                added_songs.add(song_key)
+        
+        return recommendations
     
-      return recommendations[:n_recommendations]
+    def get_recommendations_by_artist(self, artist_name, n_recommendations=10):
+        """Get recommendations based on artist name using KNN"""
+        artist_name_lower = artist_name.lower()
+        
+        # Find all songs by the artist (case-insensitive)
+        artist_songs = self.songs[self.songs['artists'].fillna('').str.lower().str.contains(artist_name_lower, na=False)]
+        
+        if len(artist_songs) == 0:
+            return f"Artist '{artist_name}' not found in the dataset."
+        
+        # Remove duplicates based on track name
+        artist_songs = artist_songs.drop_duplicates(subset=['track_name'], keep='first')
+        print(f"\nFound {len(artist_songs)} unique songs by {artist_name}")
+        
+        # Create recommendations list
+        recommendations = []
+        
+        # Add all songs by the artist
+        for _, song in artist_songs.iterrows():
+            recommendations.append({
+                'track_name': song['track_name'],
+                'artists': song['artists'],
+                'track_genre': song['track_genre'],
+                'distance': 0.0,
+                'match_type': 'Artist Song'
+            })
+        
+        # If we need more recommendations, use KNN
+        if len(recommendations) < n_recommendations:
+            # Calculate average features of artist's songs
+            artist_features = artist_songs[self.features].mean().values.reshape(1, -1)
+            
+            # Get KNN recommendations
+            distances, indices = self.knn.kneighbors(
+                artist_features,
+                n_neighbors=n_recommendations
+            )
+            
+            seen_songs = set((song['track_name'], song['artists']) for song in recommendations)
+            
+            for i, idx in enumerate(indices[0]):
+                if len(recommendations) >= n_recommendations:
+                    break
+                    
+                song = self.songs.iloc[idx]
+                song_key = (song['track_name'], song['artists'])
+                
+                if song_key not in seen_songs and not song['artists'].lower().__contains__(artist_name_lower):
+                    recommendations.append({
+                        'track_name': song['track_name'],
+                        'artists': song['artists'],
+                        'track_genre': song['track_genre'],
+                        'distance': distances[0][i],
+                        'match_type': 'Similar Song'
+                    })
+                    seen_songs.add(song_key)
+        
+        return recommendations[:n_recommendations]
     
     def get_recommendations_by_genre(self, genre, n_recommendations=5):
-        """Get recommendations based on genre"""
+        """Get recommendations based on genre using KNN"""
         # Find songs in the genre
         genre_songs = self.songs[self.songs['track_genre'].str.lower() == genre.lower()]
         if len(genre_songs) == 0:
@@ -179,24 +177,24 @@ class InteractiveMusicRecommender:
         # Get average features of the genre
         genre_features = genre_songs[self.features].mean().values.reshape(1, -1)
         
-        # Calculate similarities
-        similarities = cosine_similarity(self.songs[self.features], genre_features).flatten()
-        
-        # Get top recommendations
-        top_indices = np.argsort(similarities)[::-1][:n_recommendations]
+        # Get KNN recommendations
+        distances, indices = self.knn.kneighbors(
+            genre_features,
+            n_neighbors=n_recommendations
+        )
         
         return [
             {
                 'track_name': self.songs.iloc[idx]['track_name'],
                 'artists': self.songs.iloc[idx]['artists'],
                 'track_genre': self.songs.iloc[idx]['track_genre'],
-                
+                'distance': distances[0][i]
             }
-            for idx in top_indices
+            for i, idx in enumerate(indices[0])
         ]
-        
+    
     def get_recommendations_by_mood(self, mood, n_recommendations=5):
-        """Get recommendations based on mood"""
+        """Get recommendations based on mood using KNN"""
         mood_features = {
             'happy': {'valence': 0.8, 'energy': 0.7, 'danceability': 0.7},
             'sad': {'valence': 0.3, 'energy': 0.4, 'acousticness': 0.7},
@@ -208,7 +206,7 @@ class InteractiveMusicRecommender:
         
         if mood.lower() not in mood_features:
             return f"Mood not recognized. Available moods: {', '.join(mood_features.keys())}"
-            
+        
         # Create target features
         target_features = np.zeros(len(self.features))
         for i, feature in enumerate(self.features):
@@ -217,18 +215,18 @@ class InteractiveMusicRecommender:
             else:
                 target_features[i] = self.songs[feature].mean()
         
-        # Calculate similarities
-        similarities = cosine_similarity(self.songs[self.features], target_features.reshape(1, -1)).flatten()
-        
-        # Get top recommendations
-        top_indices = np.argsort(similarities)[::-1][:n_recommendations]
+        # Get KNN recommendations
+        distances, indices = self.knn.kneighbors(
+            target_features.reshape(1, -1),
+            n_neighbors=n_recommendations
+        )
         
         return [
             {
                 'track_name': self.songs.iloc[idx]['track_name'],
                 'artists': self.songs.iloc[idx]['artists'],
                 'track_genre': self.songs.iloc[idx]['track_genre'],
-                
+                'distance': distances[0][i]
             }
-            for idx in top_indices
+            for i, idx in enumerate(indices[0])
         ]
